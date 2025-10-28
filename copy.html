@@ -1,223 +1,366 @@
-(() => {
-  const ROOT_ID = "sefaria-iframe-plugin-root";
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sefaria Copy Tool</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; padding: 16px; color: #0f172a; background: #f8fafc; }
+    h2 { margin-top: 0; }
+    .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08); max-width: 540px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #1e293b; cursor: pointer; }
+    input[type="text"] { padding: 8px 10px; border: 1px solid #cbd5f5; border-radius: 8px; width: 260px; background: #f1f5f9; }
+    input[type="checkbox"] { width: 16px; height: 16px; }
+    button { padding: 8px 12px; border: 1px solid #cbd5f5; border-radius: 8px; background: #e2e8f0; cursor: pointer; font-weight: 500; }
+    button.primary { background: #2563eb; border-color: #1d4ed8; color: #fff; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .options { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+    .actions { margin-top: 16px; display: flex; align-items: center; gap: 12px; }
+    .muted { font-size: 12px; color: #64748b; }
+    .status { font-size: 14px; min-height: 20px; }
+    .status.error { color: #b91c1c; }
+    .status.success { color: #047857; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h2>Copy Text</h2>
+    <div class="row">
+      <div>Current sref:</div>
+      <input id="sref" type="text" readonly placeholder="waiting…" />
+      <button id="ask">Request sref</button>
+    </div>
+    <div class="muted" style="margin-top:4px;">Choose what to copy and then hit “Copy”.</div>
+    <div class="options">
+      <label>
+        <input type="checkbox" id="opt-segment" checked>
+        Copy segment (e.g. Genesis 1:1)
+      </label>
+      <label>
+        <input type="checkbox" id="opt-section">
+        Copy section (e.g. Genesis 1)
+      </label>
+      <label>
+        <input type="checkbox" id="opt-with-ref">
+        Copy with ref (prepend the chosen ref)
+      </label>
+      <label>
+        <input type="checkbox" id="opt-he-ref">
+        Copy heRef (Hebrew reference)
+      </label>
+      <label>
+        <input type="checkbox" id="opt-source" checked>
+        Copy source (Hebrew)
+      </label>
+      <label>
+        <input type="checkbox" id="opt-translation" checked>
+        Copy translation (English)
+      </label>
+    </div>
+    <div class="actions">
+      <button id="copy" class="primary">Copy</button>
+      <div id="status" class="status muted"></div>
+    </div>
+  </div>
 
-  const PLUGINS = [
-    {
-      name: "Learn with Lamm",
-      url: "http://127.0.0.1:5000/",
-      icon: "https://example.com/icon.png",
-      description: "A Learn with Lamm Sefaria plugin"
-    },
-  ];
+  <script>
+    const srefInput = document.getElementById('sref');
+    const askBtn = document.getElementById('ask');
+    const copyBtn = document.getElementById('copy');
+    const statusEl = document.getElementById('status');
 
-  if (document.getElementById(ROOT_ID)) return;
+    const segmentOpt = document.getElementById('opt-segment');
+    const sectionOpt = document.getElementById('opt-section');
+    const withRefOpt = document.getElementById('opt-with-ref');
+    const heRefOpt = document.getElementById('opt-he-ref');
+    const sourceOpt = document.getElementById('opt-source');
+    const translationOpt = document.getElementById('opt-translation');
 
-  function parseSrefFromUrl() {
-    try {
-      // Remove leading/trailing slashes and get the first path segment
-      const path = location.pathname.replace(/^\/+|\/+$/g, "");
-      console.log("Path:", path);
-      if (!path) return null;
-      
-      // Get everything before the query string
-      const ref = path.split('?')[0];
-      
-      // The ref is the first part of the path (e.g., "Genesis.2.9")
-      return decodeURIComponent(ref);
-    } catch {
-      return null;
-    }
-  }
+    let currentSref = null;
+    const htmlStripper = document.createElement('div');
 
-  function makeRoot() {
-    const root = document.createElement("div");
-    root.id = ROOT_ID;
-    document.documentElement.appendChild(root);
-    root.innerHTML = `
-      <div class="panel">
-        <div class="header">
-          <button id="backBtn" style="visibility:hidden">← Back</button>
-          <h1 id="title">Sefaria Plugins</h1>
-          <button id="closeBtn">Close</button>
-        </div>
-        <div class="body">
-          <div class="search-row">
-            <input id="filterInput" type="search" placeholder="Filter plugins by name or description…" />
-          </div>
-          <div id="list" class="list"></div>
-          <div id="iframeWrap" class="iframe-wrap" style="display:none">
-              <iframe id="pluginFrame" allow="clipboard-write" sandbox="allow-scripts allow-popups allow-same-origin"></iframe>
-          </div>
-          <div class="footer-note" id="footerNote"></div>
-        </div>
-      </div>
-    `;
-    return root;
-  }
-
-  function renderList(listEl, filter) {
-    listEl.replaceChildren();
-    const q = (filter || "").toLowerCase();
-    const rows = PLUGINS.filter(p => (p.name + " " + (p.description || "")).toLowerCase().includes(q));
-
-    if (!rows.length) {
-      const empty = document.createElement("div");
-      empty.className = "plugin-item";
-      empty.textContent = "No plugins match your filter.";
-      listEl.appendChild(empty);
-      return;
-    }
-
-    for (const p of rows) {
-      const item = document.createElement("div");
-      item.className = "plugin-item";
-      item.innerHTML = `
-        <img class="icon" src="${p.icon}" alt="icon" />
-        <div>
-          <div class="name">${p.name}</div>
-          <div class="desc">${p.description || ""}</div>
-        </div>
-      `;
-      item.addEventListener("click", () => openPlugin(p));
-      listEl.appendChild(item);
-    }
-  }
-
-  let currentPlugin = null;
-  let pluginOrigin = null;
-  let frameEl = null;
-  let footerNoteEl = null;
-  let listEl = null;
-  let backBtn = null;
-  let titleEl = null;
-  let iframeWrap = null;
-
-  function openPlugin(plugin) {
-    currentPlugin = plugin;
-    try {
-      pluginOrigin = new URL(plugin.url).origin;
-    } catch {
-      pluginOrigin = "*";
+    function setStatus(message, type = null) {
+      statusEl.textContent = message || '';
+      statusEl.className = 'status' + (type ? ' ' + type : ' muted');
     }
 
-    titleEl.textContent = plugin.name;
-    backBtn.style.visibility = "visible";
-    listEl.style.display = "none";
-    iframeWrap.style.display = "block";
-    frameEl.src = plugin.url;
-
-    frameEl.onload = () => {
-      const sref = parseSrefFromUrl();
-      if (sref && frameEl.contentWindow) {
-        frameEl.contentWindow.postMessage({ type: "sref:update", sref }, pluginOrigin || "*");
+    function ensurePrimarySelection(source) {
+      if (source === segmentOpt && segmentOpt.checked) {
+        sectionOpt.checked = false;
+      } else if (source === sectionOpt && sectionOpt.checked) {
+        segmentOpt.checked = false;
       }
-    };
-  }
-
-  function backToList() {
-    currentPlugin = null;
-    pluginOrigin = null;
-    titleEl.textContent = "Sefaria Plugins";
-    backBtn.style.visibility = "hidden";
-    iframeWrap.style.display = "none";
-    frameEl.src = "about:blank";
-    listEl.style.display = "flex";
-  }
-
-  function handlePageMessages(ev) {
-    if (!currentPlugin) return;
-    if (pluginOrigin && pluginOrigin !== "*" && ev.origin !== pluginOrigin) return;
-
-    const data = ev.data;
-    if (!data || typeof data !== "object") return;
-
-    if (data.type === "plugin:ready") {
-      const sref = parseSrefFromUrl();
-      if (sref && frameEl.contentWindow) {
-        frameEl.contentWindow.postMessage({ type: "sref:update", sref }, pluginOrigin || "*");
+      if (!segmentOpt.checked && !sectionOpt.checked) {
+        segmentOpt.checked = true;
       }
-    } else if (data.type === "plugin:request-sref") {
-      const sref = parseSrefFromUrl();
-      if (frameEl.contentWindow) {
-        frameEl.contentWindow.postMessage({ type: "sref:response", sref }, pluginOrigin || "*");
-      }
-    } else if (data.type === "plugin:log") {
-      console.log("[Plugin]", data.message);
     }
-  }
 
-  function watchSref() {
-    let last = parseSrefFromUrl();
-    let lastHref = location.href;
+    segmentOpt.addEventListener('change', () => ensurePrimarySelection(segmentOpt));
+    sectionOpt.addEventListener('change', () => ensurePrimarySelection(sectionOpt));
 
-    const checkForUrlChange = () => {
-      const currentHref = location.href;
-      if (currentHref !== lastHref) {
-        lastHref = currentHref;
-        notify();
+    function normalizeRef(ref) {
+      return (ref || '').trim();
+    }
+
+    function stripIHtmlTags(raw) {
+      if (raw == null) return '';
+      if (typeof raw !== 'string') {
+        return stripIHtmlTags(String(raw));
       }
-    };
+      return raw.replace(/<i[^>]*>(.*?)<\/i>/gi, '$1').trim();
+    }
 
-    const notify = () => {
-      const next = parseSrefFromUrl();
-      footerNoteEl.textContent = next ? `sref: ${next}` : "sref: (not detected)";
-      if (next !== last) {
-        last = next;
-        if (currentPlugin && frameEl?.contentWindow && next) {
-          frameEl.contentWindow.postMessage({ type: "sref:update", sref: next }, pluginOrigin || "*");
+    function stripHtml(raw) {
+      if (raw == null) return '';
+      if (typeof raw !== 'string') {
+        return stripHtml(String(raw));
+      }
+      htmlStripper.innerHTML = raw;
+      const text = htmlStripper.textContent || htmlStripper.innerText || '';
+      htmlStripper.textContent = '';
+      return text.trim();
+    }
+
+    function toSectionRef(ref) {
+      const normalized = normalizeRef(ref);
+      if (!normalized) return null;
+      const dotParts = normalized.split('.');
+      if (dotParts.length > 2 && /^\d+$/.test(dotParts[1])) {
+        return dotParts.slice(0, 2).join('.');
+      }
+      const colonIdx = normalized.indexOf(':');
+      if (colonIdx !== -1) {
+        return normalized.slice(0, colonIdx);
+      }
+      return normalized;
+    }
+
+    function formatDisplayRef(ref) {
+      if (!ref) return '';
+      const sanitized = ref.replace(/_/g, ' ');
+      if (sanitized.includes(':')) {
+        return sanitized;
+      }
+      const dotParts = sanitized.split('.');
+      if (dotParts.length >= 2 && /^\d+$/.test(dotParts[1])) {
+        const book = dotParts[0];
+        const chapter = dotParts[1];
+        if (dotParts.length > 2) {
+          const versePart = dotParts.slice(2).join('.');
+          return `${book} ${chapter}:${versePart}`;
+        }
+        return `${book} ${chapter}`;
+      }
+      return sanitized;
+    }
+
+    async function copyToClipboard(text) {
+      if (!text) {
+        throw new Error('Nothing to copy.');
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
+    function flattenText(value) {
+      if (!value) return '';
+      if (Array.isArray(value)) {
+        return value.map(flattenText).filter(Boolean).join('\n').trim();
+      }
+      if (typeof value === 'object') {
+        if ('text' in value) return flattenText(value.text);
+        if ('he' in value) return flattenText(value.he);
+        if ('content' in value) return flattenText(value.content);
+        return '';
+      }
+      if (typeof value === 'string') {
+        return stripHtml(value);
+      }
+      return stripHtml(String(value));
+    }
+
+    function normalizeSegment(segment, fallbackRef) {
+      if (!segment || typeof segment !== 'object') {
+        return { ref: fallbackRef || '', source: '', translation: '' };
+      }
+      return {
+        ref: segment.ref || fallbackRef || '',
+        source: flattenText(segment.he || segment.sourceText),
+        translation: flattenText(segment.text || segment.translation)
+      };
+    }
+
+    function extractSegments(apiData) {
+      if (!apiData) return [];
+      const segments = [];
+      const rootRef = apiData.ref || '';
+
+      if (Array.isArray(apiData.content)) {
+        for (const section of apiData.content) {
+          if (!section) continue;
+          const sectionRef = (typeof section === 'object' && section.ref) ? section.ref : rootRef;
+          if (section && Array.isArray(section.content)) {
+            for (const piece of section.content) {
+              segments.push(normalizeSegment(piece, sectionRef));
+            }
+          } else if (typeof section === 'object') {
+            segments.push(normalizeSegment(section, sectionRef));
+          } else if (typeof section === 'string') {
+            segments.push({ ref: sectionRef, source: '', translation: stripHtml(section) });
+          }
         }
       }
-    };
 
-    // Watch for URL changes by polling and on title changes
-    const urlCheckInterval = setInterval(checkForUrlChange, 100);
+      if (segments.length) {
+        return segments.filter(seg => seg.source || seg.translation);
+      }
 
-    // Watch for title changes which often coincide with URL updates
-    const observer = new MutationObserver(checkForUrlChange);
-    observer.observe(document.querySelector('title') || document.head, {
-      subtree: true,
-      characterData: true,
-      childList: true
-    });
+      const texts = Array.isArray(apiData.versions[0].text) ? apiData.versions[0].text : (typeof apiData.text === 'string' ? [apiData.versions[0].text] : []);
+      const sources = Array.isArray(apiData.he) ? apiData.he : (typeof apiData.he === 'string' ? [apiData.he] : []);
+      const maxLen = Math.max(texts.length, sources.length);
+      if (maxLen === 0) return [];
 
-    // Watch for back/forward navigation
-    window.addEventListener("popstate", notify);
-
-    // Cleanup function to prevent memory leaks
-    document.addEventListener('unload', () => {
-      clearInterval(urlCheckInterval);
-      observer.disconnect();
-    });
-    
-    // Initial check
-    notify();
-  }
-
-  const root = makeRoot();
-  const closeBtn = root.querySelector("#closeBtn");
-  backBtn = root.querySelector("#backBtn");
-  titleEl = root.querySelector("#title");
-  const filterInput = root.querySelector("#filterInput");
-  listEl = root.querySelector("#list");
-  frameEl = root.querySelector("#pluginFrame");
-  iframeWrap = root.querySelector("#iframeWrap");
-  footerNoteEl = root.querySelector("#footerNote");
-
-  renderList(listEl, "");
-
-  backBtn.addEventListener("click", backToList);
-  closeBtn.addEventListener("click", () => { root.style.display = "none"; });
-
-  filterInput.addEventListener("input", (e) => {
-    renderList(listEl, e.target.value || "");
-  });
-
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg?.type === "SEFARIA_IFRAME_LAUNCHER_TOGGLE") {
-      root.style.display = (root.style.display === "none" || !root.style.display) ? "block" : "none";
+      for (let i = 0; i < maxLen; i++) {
+        const translation = typeof texts[i] === 'string' ? texts[i].trim() : '';
+        const source = typeof sources[i] === 'string' ? sources[i].trim() : '';
+        segments.push({ ref: rootRef, source, translation });
+      }
+      return segments.filter(seg => seg.source || seg.translation);
     }
-  });
 
-  window.addEventListener("message", handlePageMessages);
-  watchSref();
-})();
+    async function fetchSefariaSegments(ref) {
+      const params = new URLSearchParams({
+        context: '0',
+        stripItags: '1',
+        fallbackOnDefaultVersion: '1'
+      });
+      const url = `https://www.sefaria.org/api/texts/${encodeURIComponent(ref)}?${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Sefaria API error (${res.status})`);
+      }
+      const data = await res.json();
+      if (data && data.error) {
+        throw new Error(data.error);
+      }
+      const segments = extractSegments(data);
+      if (!segments.length) {
+        throw new Error('No text returned for that reference.');
+      }
+      const normalizedRef = normalizeRef(data.ref) || normalizeRef(ref);
+      const normalizedHeRef = stripHtml(data.heRef || '');
+      return {
+        segments,
+        ref: normalizedRef,
+        heRef: normalizedHeRef
+      };
+    }
+
+    async function handleCopy() {
+      if (!currentSref) {
+        setStatus('No reference yet.', 'error');
+        return;
+      }
+      const useSection = sectionOpt.checked;
+      const targetRef = useSection ? toSectionRef(currentSref) : normalizeRef(currentSref);
+      if (!targetRef) {
+        setStatus('Unable to determine reference.', 'error');
+        return;
+      }
+      const includeSource = sourceOpt.checked;
+      const includeTranslation = translationOpt.checked;
+      const includeHeRef = heRefOpt.checked;
+
+      if (!includeSource && !includeTranslation && !includeHeRef) {
+        setStatus('Select something to copy.', 'error');
+        return;
+      }
+
+      setStatus('Fetching text…');
+      copyBtn.disabled = true;
+      try {
+        const { segments, ref: fetchedRef, heRef } = await fetchSefariaSegments(targetRef);
+        const displayRef = formatDisplayRef(fetchedRef || targetRef);
+        const displayHeRef = includeHeRef ? stripHtml(heRef || '') : '';
+        let body = '';
+        if (includeSource || includeTranslation) {
+          body = segments
+            .map((seg) => {
+              const lines = [];
+              if (includeSource && seg.source) lines.push(seg.source);
+              if (includeTranslation && seg.translation) lines.push(seg.translation);
+              return lines.join('\n').trim();
+            })
+            .filter(Boolean)
+            .join('\n\n')
+            .trim();
+        }
+
+        if (!body && !(includeHeRef && displayHeRef)) {
+          throw new Error('No text available for the selected options.');
+        }
+
+        const parts = [];
+        if (withRefOpt.checked && displayRef) {
+          parts.push(displayRef);
+        }
+        if (includeHeRef && displayHeRef) {
+          parts.push(displayHeRef);
+        }
+        if (body) {
+          parts.push(body);
+        }
+        const combined = parts.join('\n').trim();
+        await copyToClipboard(combined);
+        setStatus('Copied to clipboard!', 'success');
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || 'Failed to copy.', 'error');
+      } finally {
+        copyBtn.disabled = false;
+      }
+    }
+
+    function handleSrefUpdate(newSref) {
+      currentSref = normalizeRef(newSref);
+      srefInput.value = currentSref || '';
+      if (!currentSref) {
+        setStatus('Waiting for reference…');
+      } else {
+        setStatus('');
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'sref:update' || data.type === 'sref:response') {
+        handleSrefUpdate(data.sref || null);
+      }
+    });
+
+    askBtn.addEventListener('click', () => {
+      window.parent.postMessage({ type: 'plugin:request-sref' }, '*');
+    });
+
+    copyBtn.addEventListener('click', handleCopy);
+
+    window.parent.postMessage({ type: 'plugin:ready' }, '*');
+  </script>
+</body>
+</html>
