@@ -103,14 +103,6 @@
       return (ref || '').trim();
     }
 
-    function stripIHtmlTags(raw) {
-      if (raw == null) return '';
-      if (typeof raw !== 'string') {
-        return stripIHtmlTags(String(raw));
-      }
-      return raw.replace(/<i[^>]*>(.*?)<\/i>/gi, '$1').trim();
-    }
-
     function stripHtml(raw) {
       if (raw == null) return '';
       if (typeof raw !== 'string') {
@@ -230,14 +222,16 @@
         return segments.filter(seg => seg.source || seg.translation);
       }
 
-      const texts = Array.isArray(apiData.versions[0].text) ? apiData.versions[0].text : (typeof apiData.text === 'string' ? [apiData.versions[0].text] : []);
+      const texts = Array.isArray(apiData.text)
+        ? apiData.text
+        : (typeof apiData.text === 'string' ? [apiData.text] : []);
       const sources = Array.isArray(apiData.he) ? apiData.he : (typeof apiData.he === 'string' ? [apiData.he] : []);
       const maxLen = Math.max(texts.length, sources.length);
       if (maxLen === 0) return [];
 
       for (let i = 0; i < maxLen; i++) {
-        const translation = typeof texts[i] === 'string' ? texts[i].trim() : '';
-        const source = typeof sources[i] === 'string' ? sources[i].trim() : '';
+        const translation = flattenText(texts[i]);
+        const source = flattenText(sources[i]);
         segments.push({ ref: rootRef, source, translation });
       }
       return segments.filter(seg => seg.source || seg.translation);
