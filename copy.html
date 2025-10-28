@@ -1,0 +1,223 @@
+(() => {
+  const ROOT_ID = "sefaria-iframe-plugin-root";
+
+  const PLUGINS = [
+    {
+      name: "Learn with Lamm",
+      url: "http://127.0.0.1:5000/",
+      icon: "https://example.com/icon.png",
+      description: "A Learn with Lamm Sefaria plugin"
+    },
+  ];
+
+  if (document.getElementById(ROOT_ID)) return;
+
+  function parseSrefFromUrl() {
+    try {
+      // Remove leading/trailing slashes and get the first path segment
+      const path = location.pathname.replace(/^\/+|\/+$/g, "");
+      console.log("Path:", path);
+      if (!path) return null;
+      
+      // Get everything before the query string
+      const ref = path.split('?')[0];
+      
+      // The ref is the first part of the path (e.g., "Genesis.2.9")
+      return decodeURIComponent(ref);
+    } catch {
+      return null;
+    }
+  }
+
+  function makeRoot() {
+    const root = document.createElement("div");
+    root.id = ROOT_ID;
+    document.documentElement.appendChild(root);
+    root.innerHTML = `
+      <div class="panel">
+        <div class="header">
+          <button id="backBtn" style="visibility:hidden">← Back</button>
+          <h1 id="title">Sefaria Plugins</h1>
+          <button id="closeBtn">Close</button>
+        </div>
+        <div class="body">
+          <div class="search-row">
+            <input id="filterInput" type="search" placeholder="Filter plugins by name or description…" />
+          </div>
+          <div id="list" class="list"></div>
+          <div id="iframeWrap" class="iframe-wrap" style="display:none">
+              <iframe id="pluginFrame" allow="clipboard-write" sandbox="allow-scripts allow-popups allow-same-origin"></iframe>
+          </div>
+          <div class="footer-note" id="footerNote"></div>
+        </div>
+      </div>
+    `;
+    return root;
+  }
+
+  function renderList(listEl, filter) {
+    listEl.replaceChildren();
+    const q = (filter || "").toLowerCase();
+    const rows = PLUGINS.filter(p => (p.name + " " + (p.description || "")).toLowerCase().includes(q));
+
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "plugin-item";
+      empty.textContent = "No plugins match your filter.";
+      listEl.appendChild(empty);
+      return;
+    }
+
+    for (const p of rows) {
+      const item = document.createElement("div");
+      item.className = "plugin-item";
+      item.innerHTML = `
+        <img class="icon" src="${p.icon}" alt="icon" />
+        <div>
+          <div class="name">${p.name}</div>
+          <div class="desc">${p.description || ""}</div>
+        </div>
+      `;
+      item.addEventListener("click", () => openPlugin(p));
+      listEl.appendChild(item);
+    }
+  }
+
+  let currentPlugin = null;
+  let pluginOrigin = null;
+  let frameEl = null;
+  let footerNoteEl = null;
+  let listEl = null;
+  let backBtn = null;
+  let titleEl = null;
+  let iframeWrap = null;
+
+  function openPlugin(plugin) {
+    currentPlugin = plugin;
+    try {
+      pluginOrigin = new URL(plugin.url).origin;
+    } catch {
+      pluginOrigin = "*";
+    }
+
+    titleEl.textContent = plugin.name;
+    backBtn.style.visibility = "visible";
+    listEl.style.display = "none";
+    iframeWrap.style.display = "block";
+    frameEl.src = plugin.url;
+
+    frameEl.onload = () => {
+      const sref = parseSrefFromUrl();
+      if (sref && frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage({ type: "sref:update", sref }, pluginOrigin || "*");
+      }
+    };
+  }
+
+  function backToList() {
+    currentPlugin = null;
+    pluginOrigin = null;
+    titleEl.textContent = "Sefaria Plugins";
+    backBtn.style.visibility = "hidden";
+    iframeWrap.style.display = "none";
+    frameEl.src = "about:blank";
+    listEl.style.display = "flex";
+  }
+
+  function handlePageMessages(ev) {
+    if (!currentPlugin) return;
+    if (pluginOrigin && pluginOrigin !== "*" && ev.origin !== pluginOrigin) return;
+
+    const data = ev.data;
+    if (!data || typeof data !== "object") return;
+
+    if (data.type === "plugin:ready") {
+      const sref = parseSrefFromUrl();
+      if (sref && frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage({ type: "sref:update", sref }, pluginOrigin || "*");
+      }
+    } else if (data.type === "plugin:request-sref") {
+      const sref = parseSrefFromUrl();
+      if (frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage({ type: "sref:response", sref }, pluginOrigin || "*");
+      }
+    } else if (data.type === "plugin:log") {
+      console.log("[Plugin]", data.message);
+    }
+  }
+
+  function watchSref() {
+    let last = parseSrefFromUrl();
+    let lastHref = location.href;
+
+    const checkForUrlChange = () => {
+      const currentHref = location.href;
+      if (currentHref !== lastHref) {
+        lastHref = currentHref;
+        notify();
+      }
+    };
+
+    const notify = () => {
+      const next = parseSrefFromUrl();
+      footerNoteEl.textContent = next ? `sref: ${next}` : "sref: (not detected)";
+      if (next !== last) {
+        last = next;
+        if (currentPlugin && frameEl?.contentWindow && next) {
+          frameEl.contentWindow.postMessage({ type: "sref:update", sref: next }, pluginOrigin || "*");
+        }
+      }
+    };
+
+    // Watch for URL changes by polling and on title changes
+    const urlCheckInterval = setInterval(checkForUrlChange, 100);
+
+    // Watch for title changes which often coincide with URL updates
+    const observer = new MutationObserver(checkForUrlChange);
+    observer.observe(document.querySelector('title') || document.head, {
+      subtree: true,
+      characterData: true,
+      childList: true
+    });
+
+    // Watch for back/forward navigation
+    window.addEventListener("popstate", notify);
+
+    // Cleanup function to prevent memory leaks
+    document.addEventListener('unload', () => {
+      clearInterval(urlCheckInterval);
+      observer.disconnect();
+    });
+    
+    // Initial check
+    notify();
+  }
+
+  const root = makeRoot();
+  const closeBtn = root.querySelector("#closeBtn");
+  backBtn = root.querySelector("#backBtn");
+  titleEl = root.querySelector("#title");
+  const filterInput = root.querySelector("#filterInput");
+  listEl = root.querySelector("#list");
+  frameEl = root.querySelector("#pluginFrame");
+  iframeWrap = root.querySelector("#iframeWrap");
+  footerNoteEl = root.querySelector("#footerNote");
+
+  renderList(listEl, "");
+
+  backBtn.addEventListener("click", backToList);
+  closeBtn.addEventListener("click", () => { root.style.display = "none"; });
+
+  filterInput.addEventListener("input", (e) => {
+    renderList(listEl, e.target.value || "");
+  });
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === "SEFARIA_IFRAME_LAUNCHER_TOGGLE") {
+      root.style.display = (root.style.display === "none" || !root.style.display) ? "block" : "none";
+    }
+  });
+
+  window.addEventListener("message", handlePageMessages);
+  watchSref();
+})();
